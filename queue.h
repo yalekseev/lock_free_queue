@@ -22,7 +22,7 @@ private:
     };
 
     struct node_type {
-        node_type() {
+        node_type() : m_data(0) {
             // Set node counter
             node_counter_type new_counter;
             new_counter.m_internal_count = 0;
@@ -56,18 +56,27 @@ private:
 public:
     queue();
 
+    queue(const queue & other) = delete;
+
+    ~queue();
+
+    queue & operator=(const queue & other) = delete;
+
     bool try_pop(T & data);
 
     void push(const T & data);
 
+    // TODO: void push(T && data);
     // TODO: unsafe_empty();
     // TODO: unsafe_clear();
     // TODO: unsafe_size();
 
 private:
-    static void increase_external_count(
-            std::atomic<counted_node_type> & counted_node,
-            counted_node_type & old_counted_node);
+    counted_node_type get_head();
+
+    counted_node_type get_tail();
+
+    counted_node_type increase_external_and_get(std::atomic<counted_node_type> & node);
 
     static void free_external_counter(counted_node_type & old_counted_node);
 
@@ -88,24 +97,34 @@ queue<T>::queue() {
 }
 
 template <typename T>
+queue<T>::~queue() {
+    T val;
+    while (try_pop(val)) {
+        ;
+    }
+}
+
+template <typename T>
 bool queue<T>::try_pop(T & data) {
-    counted_node_type old_head = m_head.load();   
 
     while (true) {
-        // TODO: get_head();
-        increase_external_count(m_head, old_head);
+        counted_node_type old_head = get_head();
+
         node_type * node_ptr = old_head.m_node_ptr;
         if (node_ptr == m_tail.load().m_node_ptr) {
+            // Queue is empty
             return false;
         }
 
-        counted_node_type next_counted_node = node_ptr->m_next.load();
-        if (m_head.compare_exchange_strong(old_head, next_counted_node)) {
-            data = *(node_ptr->m_data.load());
+        counted_node_type new_head = node_ptr->m_next.load();
+        if (m_head.compare_exchange_strong(old_head, new_head)) {
+            data = *(node_ptr->m_data.exchange(0));
             free_external_counter(old_head);
             return true;
         }
 
+        // Another thread has already changed head (popped value). So release
+        // the node and try again.
         node_ptr->release_ref();
     }
 }
@@ -114,51 +133,66 @@ template <typename T>
 void queue<T>::push(const T & data) {
     // std::shared_ptr can't be used here because of it's internal locks
     std::unique_ptr<T> new_data(new T(data));
-    counted_node_type new_next;
-    new_next.m_node_ptr = new node_type;
-    new_next.m_external_count = 1;
 
-    counted_node_type old_tail = m_tail.load();
+    //
+    counted_node_type new_tail;
+    new_tail.m_node_ptr = new node_type;
+    new_tail.m_external_count = 1;
+
 
     while (true) {
-        // TODO: get_tail();
-        increase_external_count(m_tail, old_tail);
+        counted_node_type old_tail = get_tail();
 
         T * old_data = 0;
+        // Check whether the tail hasn't changed, add new data to it if so
         if (old_tail.m_node_ptr->m_data.compare_exchange_strong(old_data, new_data.get())) {
-            counted_node_type old_next = { 0 };
-            if (!old_tail.m_node_ptr->m_next.compare_exchange_strong(old_next, new_next)) {
-                delete new_next.m_node_ptr;
-                new_next = old_next;
+            counted_node_type dummy_tail = { 0, 0 };
+            // Check whether the tail hasn't changed, add dummy tail node to it if so
+            if (!old_tail.m_node_ptr->m_next.compare_exchange_strong(dummy_tail, new_tail)) {
+                delete new_tail.m_node_ptr;
+                new_tail = dummy_tail;
             }
 
-            set_new_tail(old_tail, new_next);
+            set_new_tail(old_tail, new_tail);
             new_data.release();
             return;
         } else {
-            counted_node_type old_next = { 0 };
-            if (old_tail.m_node_ptr->m_next.compare_exchange_strong(old_next, new_next)) {
-                old_next = new_next;
-                new_next.m_node_ptr = new node_type;
-            }
+            // Help the successful thread to create new tail
+            counted_node_type dummy_tail = { 0, 0 };
+            // Check if next pointer of tail is empty, set it to new tail if so
+            if (old_tail.m_node_ptr->m_next.compare_exchange_strong(dummy_tail, new_tail)) {
+                new_tail.m_node_ptr = new node_type;
 
-            set_new_tail(old_tail, old_next);
+                set_new_tail(old_tail, new_tail);
+            } else {
+                set_new_tail(old_tail, dummy_tail);
+            }
         }
     }
-
 }
 
 template <typename T>
-void queue<T>::increase_external_count(
-        std::atomic<counted_node_type> & counted_node,
-        counted_node_type & old_counted_node) {
-    counted_node_type new_counted_node;
-    do {
-        new_counted_node = old_counted_node;
-        ++new_counted_node.m_external_count;
-    } while (!counted_node.compare_exchange_strong(old_counted_node, new_counted_node));
+typename queue<T>::counted_node_type queue<T>::increase_external_and_get(std::atomic<counted_node_type> & node) {
+    counted_node_type new_node;
 
-    old_counted_node.m_external_count = new_counted_node.m_external_count;
+    counted_node_type old_node = node.load();
+
+    do {
+        new_node = old_node;
+        ++new_node.m_external_count;
+    } while (!node.compare_exchange_strong(old_node, new_node));
+
+    return new_node;
+}
+
+template <typename T>
+typename queue<T>::counted_node_type queue<T>::get_head() {
+    return increase_external_and_get(m_head);
+}
+
+template <typename T>
+typename queue<T>::counted_node_type queue<T>::get_tail() {
+    return increase_external_and_get(m_tail);
 }
 
 template <typename T>

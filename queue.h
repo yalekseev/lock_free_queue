@@ -216,16 +216,16 @@ void queue<T>::free_external_counter(counted_node_type & old_counted_node) {
 
 template <typename T>
 void queue<T>::set_new_tail(counted_node_type & old_tail, const counted_node_type & new_tail) {
-    node_type * current_tail_ptr = old_tail.m_node_ptr;
+    node_type * old_node_ptr = old_tail.m_node_ptr;
 
-    while (!m_tail.compare_exchange_strong(old_tail, new_tail) && old_tail.m_node_ptr == current_tail_ptr) {
+    while (!m_tail.compare_exchange_strong(old_tail, new_tail) && old_tail.m_node_ptr == old_node_ptr) {
         ;
     }
 
-    if (old_tail.m_node_ptr == current_tail_ptr) {
+    if (old_tail.m_node_ptr == old_node_ptr) {
         free_external_counter(old_tail);
     } else {
-        current_tail_ptr->release_ref();
+        old_node_ptr->release_ref();
     }
 }
 

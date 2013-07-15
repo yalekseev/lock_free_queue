@@ -104,7 +104,6 @@ queue<T>::~queue() {
 
 template <typename T>
 bool queue<T>::try_pop(T & data) {
-
     while (true) {
         counted_node_type old_head = get_head();
 

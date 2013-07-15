@@ -80,8 +80,6 @@ private:
 
     static void free_external_counter(counted_node_type & old_counted_node);
 
-    void set_new_tail(counted_node_type & old_tail, const counted_node_type & new_tail);
-
     std::atomic<counted_node_type> m_head;
     std::atomic<counted_node_type> m_tail;
 };
@@ -196,21 +194,6 @@ void queue<T>::free_external_counter(counted_node_type & old_counted_node) {
 
     if (new_node_counter.m_internal_count == 0 && new_node_counter.m_external_counters == 0) {
         delete node_ptr;
-    }
-}
-
-template <typename T>
-void queue<T>::set_new_tail(counted_node_type & old_tail, const counted_node_type & new_tail) {
-    node_type * old_node_ptr = old_tail.m_node_ptr;
-
-    while (!m_tail.compare_exchange_strong(old_tail, new_tail) && old_tail.m_node_ptr == old_node_ptr) {
-        ;
-    }
-
-    if (old_tail.m_node_ptr == old_node_ptr) {
-        free_external_counter(old_tail);
-    } else {
-        old_node_ptr->release_ref();
     }
 }
 

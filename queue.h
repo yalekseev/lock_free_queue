@@ -144,30 +144,15 @@ void queue<T>::push(const T & data) {
         counted_node_type old_tail = get_tail();
 
         T * old_data = 0;
-        // Check whether the tail hasn't changed, add new data to it if so
         if (old_tail.m_node_ptr->m_data.compare_exchange_strong(old_data, new_data.get())) {
-            counted_node_type dummy_tail = { 0, 0 };
-            // Check whether the tail hasn't changed, add dummy tail node to it if so
-            if (!old_tail.m_node_ptr->m_next.compare_exchange_strong(dummy_tail, new_tail)) {
-                delete new_tail.m_node_ptr;
-                new_tail = dummy_tail;
-            }
-
-            set_new_tail(old_tail, new_tail);
+            old_tail.m_node_ptr->m_next = new_tail;
+            old_tail = m_tail.exchange(new_tail);
+            free_external_counter(old_tail);
             new_data.release();
             return;
-        } else {
-            // Help the successful thread to create new tail
-            counted_node_type dummy_tail = { 0, 0 };
-            // Check if next pointer of tail is empty, set it to new tail if so
-            if (old_tail.m_node_ptr->m_next.compare_exchange_strong(dummy_tail, new_tail)) {
-                new_tail.m_node_ptr = new node_type;
-
-                set_new_tail(old_tail, new_tail);
-            } else {
-                set_new_tail(old_tail, dummy_tail);
-            }
         }
+
+        old_tail.m_node_ptr->release_ref();
     }
 }
 
